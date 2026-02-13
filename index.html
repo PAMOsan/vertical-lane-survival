@@ -3,25 +3,21 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
-<title>Vertical Lane Survival - 完全版（9:16 UNITベース・LINE対応）</title>
+<title>Vertical Lane Survival - 完全版（レーン延長・幅広め・CLEARはDOM表示）</title>
 <style>
-  :root { --ui-height:56px; --gap:8px; }
-  html,body { height:100%; margin:0; background:#0b0b0b; color:#fff; font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; -webkit-tap-highlight-color: transparent; -webkit-user-select:none; user-select:none; }
+  html,body { height:100%; margin:0; background:#0b0b0b; color:#fff; font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; -webkit-tap-highlight-color: transparent; }
   body { padding-bottom: env(safe-area-inset-bottom, 0); box-sizing:border-box; }
-  #container { width:100%; height:100vh; max-width:100vw; margin:0 auto; display:flex; flex-direction:column; gap:var(--gap); padding:6px; box-sizing:border-box; }
-  #ui { height:var(--ui-height); display:flex; gap:8px; align-items:center; justify-content:space-between; }
-  .info { font-size:14px; color:#ddd; line-height:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  button { padding:8px 12px; background:#1f6feb; color:#fff; border:0; border-radius:8px; cursor:pointer; font-size:15px; }
-  #gameWrap { position:relative; flex:1 1 auto; display:flex; align-items:center; justify-content:center; }
-  #game { background:#151515; border-radius:10px; border:3px solid #333; display:block; touch-action:none; }
-  #clearOverlay { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); pointer-events:none; display:none; z-index:20; text-align:center; }
-  #clearOverlay .text { font-weight:900; color:#fff59d; text-shadow:0 6px 18px rgba(0,0,0,0.8); font-size:clamp(28px, 8vw, 64px); letter-spacing:6px; }
-  #message { height:28px; text-align:center; color:#ffd; font-size:14px; }
-  .hint { font-size:12px; color:#bbb; text-align:center; padding-bottom:4px; }
-  @media (max-width:360px) {
-    .info { font-size:13px; }
-    button { font-size:13px; padding:6px 10px; }
-  }
+  /* 幅を広めに（スマホでも収まるように最大480px） */
+  #container { width:100%; max-width:480px; margin:10px auto; box-sizing:border-box; padding:0 8px; }
+  #ui { display:flex; gap:8px; align-items:center; justify-content:space-between; margin-bottom:8px; }
+  #gameWrap { position:relative; }
+  #game { display:block; width:100%; background:#151515; border:4px solid #333; box-sizing:border-box; touch-action:none; border-radius:8px; }
+  button { padding:6px 10px; background:#1f6feb; color:#fff; border:0; border-radius:6px; cursor:pointer; font-size:14px; }
+  .info { font-size:13px; color:#ddd; line-height:1; }
+  .hint { font-size:12px; color:#bbb; margin-top:6px; text-align:center; }
+  /* CLEAR overlay（DOMで一つだけ表示） */
+  #clearOverlay { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); pointer-events:none; display:none; z-index:10; text-align:center; }
+  #clearOverlay .text { font-weight:900; color:#fff59d; text-shadow:0 6px 18px rgba(0,0,0,0.8); font-size:48px; letter-spacing:6px; }
 </style>
 </head>
 <body>
@@ -41,53 +37,35 @@
   </div>
 
 <script>
-/*
-  完全版（要求どおり）
-  - ステージ比率 9:16（STAGE_W / STAGE_H）
-  - UNIT ベースでサイズ・位置を決定（例: 9のうち0.5 = UNIT * 0.5）
-  - visualViewport 対応（LINE 等の in-app browser 対策）
-  - ゲームロジックは既存のまま（当たり判定・挙動は変更なし）
+/* 完全版
+ - レーンを長く（論理サイズを大きめに）
+ - コンテナ幅を広め（max-width:480px）
+ - CLEAR は canvas 上では描かず DOM overlay (#clearOverlay) のみで表示
+ - visualViewport を優先してリサイズ（in-app browser 対応）
 */
 
-/* ステージ設定（9:16） */
-const STAGE_W = 9;
-const STAGE_H = 16;
-const STAGE_BASE = 1100; // 内部論理高さ（必要なら変更）
-
-/* 論理ステージサイズ（STAGE_BASE を高さに固定） */
-let CSS_WIDTH = Math.round(STAGE_BASE * (STAGE_W / STAGE_H));
-let CSS_HEIGHT = STAGE_BASE;
-
-/* UNIT（1単位あたりの論理ピクセル）: resize 時に再計算 */
-let UNIT = CSS_WIDTH / STAGE_W;
-
-/* スケール依存のサイズ（resize で更新） */
-let PLAYER_RADIUS = 16;
-let ENEMY_RADIUS = 11;
-let BULLET_RADIUS = 4;
-let ALLY_SCALE = 0.8;
-let BOSS_RADIUS = 72;
-let ITEM_WIDTH = 80;
-let ITEM_HEIGHT = 20;
-
-/* ゲームパラメータ */
-const PLAYER_SPEED = 4;
-const BULLET_SPEED = 600;
-let ENEMY_SPEED = 0.9;
-const ITEM_SPEED = 0.55;
-const SURVIVE_TIME = 60;
-
-/* DOM */
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const clearOverlay = document.getElementById('clearOverlay');
+
 const killText = document.getElementById('killText');
 const weaponText = document.getElementById('weaponText');
 const allyText = document.getElementById('allyText');
 const messageEl = document.getElementById('message');
 const restartBtn = document.getElementById('restartBtn');
 
-/* 状態 */
+/* 論理ゲームサイズ（縦長に拡張） */
+let CSS_WIDTH = 520;
+let CSS_HEIGHT = 1100;
+
+const PLAYER_SPEED = 4;
+const PLAYER_RADIUS = 16;
+const BULLET_SPEED = 600;
+let ENEMY_SPEED = 0.9;
+const ITEM_SPEED = 0.55;
+const ENEMY_RADIUS = 11;
+const SURVIVE_TIME = 60;
+
 let keys = {};
 let lastTime = performance.now();
 let elapsedTime = 0;
@@ -115,106 +93,68 @@ let touchX = null;
 let touchActive = false;
 let touchIndicator = null;
 
-/* touch-action を確実に無効化 */
-canvas.style.touchAction = 'none';
+/* リサイズ（visualViewport 優先） */
+function resizeCanvasToDisplaySize() {
+  // 親コンテナ幅（最大480）を基準に
+  const container = document.getElementById('container');
+  const maxW = Math.min(480, window.innerWidth - 16);
+  const cssW = Math.max(300, Math.floor(maxW)); // 最小幅を確保
 
-/* ---------- スケール / UNIT 関連 ---------- */
-function updateScaleDependentSizes() {
-  UNIT = CSS_WIDTH / STAGE_W;
-  // 指定例: 「9のうち0.5」を半径にするなら UNIT * 0.5
-  PLAYER_RADIUS = Math.max(10, Math.round(UNIT * 0.6));   // プレイヤー半径 = 0.6 unit
-  ENEMY_RADIUS  = Math.max(8,  Math.round(UNIT * 0.5));   // 敵半径 = 0.5 unit
-  BULLET_RADIUS = Math.max(3,  Math.round(UNIT * 0.12));  // 弾半径 = 0.12 unit
-  BOSS_RADIUS   = Math.max(48, Math.round(UNIT * 2.2));   // ボス半径 = 2.2 unit
-  ALLY_SCALE = Math.max(0.5, Math.min(1.2, UNIT / 16));
-  ITEM_WIDTH = Math.max(40, Math.round(UNIT * 1.6));
-  ITEM_HEIGHT = Math.max(18, Math.round(UNIT * 0.5));
-}
+  // visualViewport が使えるなら優先
+  const viewportH = (window.visualViewport && window.visualViewport.height) ? window.visualViewport.height : window.innerHeight;
 
-/* visualViewport 対応のリサイズ / フィット関数（安全に transform を設定） */
-function resizeCanvasToFitStage() {
-  const viewportW = window.visualViewport ? window.visualViewport.width : window.innerWidth;
-  const viewportH = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-
+  // UI の高さを差し引く（#ui の高さを取得）
   const uiRect = document.getElementById('ui').getBoundingClientRect();
-  const hintRect = document.querySelector('.hint').getBoundingClientRect();
-  const reserved = uiRect.height + hintRect.height + 18 + (parseFloat(getComputedStyle(document.body).paddingBottom) || 0);
+  const reserved = uiRect.height + 80 + (parseFloat(getComputedStyle(document.body).paddingBottom) || 0);
 
-  const availableW = Math.max(320, Math.floor(viewportW - 12));
-  const availableH = Math.max(420, Math.floor(viewportH - reserved));
+  const availableH = Math.max(360, Math.floor(viewportH - reserved));
 
-  const stageRatio = STAGE_W / STAGE_H;
-
-  let targetW = availableW;
-  let targetH = Math.floor(targetW / stageRatio);
-  if (targetH > availableH) {
-    targetH = availableH;
-    targetW = Math.floor(targetH * stageRatio);
+  const aspect = CSS_HEIGHT / CSS_WIDTH;
+  let cssH = Math.floor(cssW * aspect);
+  if (cssH > availableH) {
+    cssH = availableH;
+    const newW = Math.floor(cssH / aspect);
+    if (newW >= 300) {
+      canvas.style.width = newW + 'px';
+      canvas.style.height = cssH + 'px';
+      CSS_WIDTH = newW;
+      CSS_HEIGHT = cssH;
+    } else {
+      canvas.style.width = cssW + 'px';
+      canvas.style.height = cssH + 'px';
+      CSS_WIDTH = cssW;
+      CSS_HEIGHT = cssH;
+    }
+  } else {
+    canvas.style.width = cssW + 'px';
+    canvas.style.height = cssH + 'px';
+    CSS_WIDTH = cssW;
+    CSS_HEIGHT = cssH;
   }
 
-  // CSS 表示サイズ
-  canvas.style.width = targetW + 'px';
-  canvas.style.height = targetH + 'px';
-
-  // 論理ステージ（内部座標）
-  CSS_HEIGHT = STAGE_BASE;
-  CSS_WIDTH = Math.round(STAGE_BASE * stageRatio);
-
-  // 内部ピクセル解像度（DPR）
   const dpr = Math.max(1, window.devicePixelRatio || 1);
   canvas.width = Math.floor(CSS_WIDTH * dpr);
   canvas.height = Math.floor(CSS_HEIGHT * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  // マッピング（安全にリセットして scale）
-  ctx.setTransform(1,0,0,1,0,0);
-  const scaleX = (dpr * targetW) / CSS_WIDTH;
-  const scaleY = (dpr * targetH) / CSS_HEIGHT;
-  ctx.scale(scaleX, scaleY);
-
-  // スケール依存サイズ更新
-  updateScaleDependentSizes();
-
-  // プレイヤー等の位置補正（見切れ防止）
-  if (player) {
-    player.x = Math.max(PLAYER_RADIUS, Math.min(CSS_WIDTH - PLAYER_RADIUS, player.x));
-    player.y = CSS_HEIGHT - Math.round(UNIT * 1.0) - 20;
-  }
+  // overlay は親要素内で CSS 中央に配置しているため JS 側で位置調整不要
 }
 
-/* クライアント座標 -> 論理ステージ座標（visualViewport のオフセットを考慮） */
+/* 座標変換 */
 function clientXToCanvasX(clientX) {
   const rect = canvas.getBoundingClientRect();
-  const offsetLeft = (window.visualViewport && typeof window.visualViewport.offsetLeft === 'number') ? window.visualViewport.offsetLeft : 0;
-  const x = (clientX - rect.left + offsetLeft) * (CSS_WIDTH / rect.width);
+  const x = (clientX - rect.left) * (CSS_WIDTH / rect.width);
   return Math.max(PLAYER_RADIUS, Math.min(CSS_WIDTH - PLAYER_RADIUS, x));
 }
 function clientYToCanvasY(clientY) {
   const rect = canvas.getBoundingClientRect();
-  const offsetTop = (window.visualViewport && typeof window.visualViewport.offsetTop === 'number') ? window.visualViewport.offsetTop : 0;
-  const y = (clientY - rect.top + offsetTop) * (CSS_HEIGHT / rect.height);
+  const y = (clientY - rect.top) * (CSS_HEIGHT / rect.height);
   return Math.max(0, Math.min(CSS_HEIGHT, y));
 }
 
-/* visualViewport の変化に追従 */
-let _viewportListenersAttached = false;
-function attachViewportListeners() {
-  if (_viewportListenersAttached) return;
-  _viewportListenersAttached = true;
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', () => { setTimeout(resizeCanvasToFitStage, 60); });
-    window.visualViewport.addEventListener('scroll', () => { setTimeout(resizeCanvasToFitStage, 60); });
-  }
-  window.addEventListener('orientationchange', () => { setTimeout(resizeCanvasToFitStage, 120); });
-  window.addEventListener('resize', () => { setTimeout(resizeCanvasToFitStage, 60); });
-}
-
-/* ---------- 初期化 / リセット（UNIT を使って位置を決める） ---------- */
+/* 初期化 */
 function resetGame() {
-  // ensure CSS_WIDTH/CSS_HEIGHT/UNIT are up-to-date
-  updateScaleDependentSizes();
-  UNIT = CSS_WIDTH / STAGE_W;
-
-  player = { x: Math.round(UNIT * (STAGE_W * 0.5)), y: CSS_HEIGHT - Math.round(UNIT * 1.0) - 20, hp: 100, facing: -Math.PI/2 };
+  player = { x: CSS_WIDTH/2, y: CSS_HEIGHT - 60, hp: 100, facing: -Math.PI/2 };
   bullets = [];
   enemyGroups = [];
   items = [];
@@ -236,16 +176,19 @@ function resetGame() {
   touchX = null; touchActive = false; touchIndicator = null;
   clearOverlay.style.display = 'none';
 }
-
-/* ---------- 入力イベント（既存ロジック） ---------- */
 restartBtn.addEventListener('click', () => {
-  resizeCanvasToFitStage();
   resetGame();
+  // リサイズしてからプレイヤー位置を補正
+  resizeCanvasToDisplaySize();
+  player.x = Math.max(PLAYER_RADIUS, Math.min(CSS_WIDTH - PLAYER_RADIUS, player.x));
+  player.y = CSS_HEIGHT - 60;
 });
 
+/* キーボード（デスクトップ用） */
 window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
 window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
+/* タッチ / ポインタ */
 canvas.addEventListener('touchstart', (ev) => {
   ev.preventDefault();
   const t = ev.touches[0];
@@ -294,43 +237,50 @@ canvas.addEventListener('pointercancel', (ev) => {
   touchIndicator = null;
 });
 
-/* ---------- ゲームロジック（既存のまま） ---------- */
+window.addEventListener('resize', () => {
+  resizeCanvasToDisplaySize();
+  if (player) {
+    player.x = Math.max(PLAYER_RADIUS, Math.min(CSS_WIDTH - PLAYER_RADIUS, player.x));
+    player.y = CSS_HEIGHT - 60;
+  }
+});
 
+/* ====== ゲームロジック（弾は真上） ====== */
 function spawnEnemyGroup() {
   const totalEnemies = enemyGroups.reduce((s,g)=>s+g.enemies.length,0);
-  const TOTAL_ENEMY_CAP = 180;
+  const TOTAL_ENEMY_CAP = 140;
   if (totalEnemies >= TOTAL_ENEMY_CAP) return;
 
   const progress = Math.min(elapsedTime / SURVIVE_TIME, 1);
   const growthDelay = 0.45;
   const p = progress <= growthDelay ? 0 : (progress - growthDelay) / (1 - growthDelay);
 
-  const bandMin = 0.12, bandMax = 0.95;
+  const bandMin = 0.30, bandMax = 0.90;
   const bandWidth = CSS_WIDTH * (bandMin + (bandMax - bandMin) * Math.pow(progress, 1.2));
   const bandStart = Math.random() * Math.max(0, CSS_WIDTH - bandWidth);
   let centerX = bandStart + bandWidth / 2;
 
-  const edgeMargin = Math.max(Math.round(UNIT * 0.6), ENEMY_RADIUS * 2);
+  const edgeMargin = Math.max(40, ENEMY_RADIUS * 2);
   centerX = Math.min(Math.max(centerX, edgeMargin), CSS_WIDTH - edgeMargin);
 
   const group = { x: centerX, y: -40, enemies: [] };
 
   const baseMin = 2, baseMax = 4;
   const raw = baseMin + Math.floor(Math.random() * (baseMax - baseMin + 1));
-  const maxMultiplier = 5.0;
+  const maxMultiplier = 4.5;
   const scale = 0.3 + Math.pow(p, 1.2) * (maxMultiplier - 0.3);
-  const maxCountCap = 22;
+  const maxCountCap = 18;
   const count = Math.min(maxCountCap, Math.max(1, Math.floor(raw * scale)));
 
   const baseEnemyHPMin = 6, baseEnemyHPMax = 12;
   const hpScale = 1 + p * 1.0;
 
   const rMinStart = 6, rMaxStart = 10;
-  const rMinEnd = 20, rMaxEnd = Math.min(CSS_WIDTH * 0.5, 200);
+  const rMinEnd = 20, rMaxEnd = Math.min(CSS_WIDTH * 0.4, 120);
   const rMin = rMinStart + (rMinEnd - rMinStart) * progress;
   const rMax = rMaxStart + (rMaxEnd - rMaxStart) * progress;
 
-  const localMargin = 10;
+  const localMargin = 12;
 
   for (let i=0;i<count;i++){
     const r = rMin + Math.random() * (rMax - rMin);
@@ -349,14 +299,14 @@ function spawnEnemyGroup() {
 
   let eliteChance = 0;
   if (p > 0) eliteChance = 0.02 + Math.pow(p, 1.2) * 0.08;
-  const maxElitePerGroup = 3;
+  const maxElitePerGroup = 1;
   if (Math.random() < eliteChance) {
-    const extra = Math.min(maxElitePerGroup, 1 + Math.floor(p * 2));
+    const extra = Math.min(maxElitePerGroup, 1 + Math.floor(p * 1));
     for (let k=0;k<extra;k++){
-      const ox = (Math.random()-0.5) * Math.min(bandWidth, 360);
-      const oy = (Math.random()-0.5) * Math.min(rMax, 200);
+      const ox = (Math.random()-0.5) * Math.min(bandWidth, 240);
+      const oy = (Math.random()-0.5) * Math.min(rMax, 140);
       const clampedOx = Math.min(Math.max(ox, edgeMargin - group.x + localMargin), (CSS_WIDTH - edgeMargin) - group.x - localMargin);
-      const eliteBase = 220 + Math.random() * 160;
+      const eliteBase = 160 + Math.random() * 80;
       const eliteHp = Math.floor(eliteBase * (1 + p * 0.6));
       group.enemies.push({ ox: clampedOx, oy, jitterPhase: Math.random() * Math.PI * 2, hp: eliteHp, isElite: true });
     }
@@ -375,10 +325,10 @@ function spawnEnemyGroup() {
 function spawnBoss() {
   boss = {
     x: CSS_WIDTH/2,
-    y: -220,
-    hp: 42000 + Math.floor(Math.random()*16000),
+    y: -160,
+    hp: 26000 + Math.floor(Math.random()*8000),
     speed: 0.5,
-    radius: BOSS_RADIUS,
+    radius: 72,
     dead: false,
     deathTimer: 0
   };
@@ -387,7 +337,7 @@ function spawnBoss() {
 function spawnItem() {
   if (boss && !boss.dead) return;
 
-  const edgeMargin = Math.max(Math.round(UNIT * 0.6), 40);
+  const edgeMargin = 40;
   const x = Math.min(Math.max(Math.random() * CSS_WIDTH, edgeMargin), CSS_WIDTH - edgeMargin);
   const progress = Math.min(elapsedTime / SURVIVE_TIME, 1);
   const allyProb = 0.40;
@@ -424,7 +374,7 @@ function upgradeWeapon() {
 }
 
 function computeGunTip(x,y,facing,ownerRadius){
-  const offset = ownerRadius + Math.max(6, Math.floor(CSS_HEIGHT * 0.005));
+  const offset = ownerRadius + 8;
   return { tx: x + Math.cos(facing)*offset, ty: y + Math.sin(facing)*offset };
 }
 function shootPlayer(x,y){
@@ -444,7 +394,7 @@ function shootPlayer(x,y){
 }
 function shootAlly(a){
   const angle = -Math.PI/2;
-  const tip = computeGunTip(a.x, a.y-4, angle, Math.max(8, Math.floor(PLAYER_RADIUS*0.6)));
+  const tip = computeGunTip(a.x, a.y-4, angle, 10);
   bullets.push({
     x: tip.tx, y: tip.ty,
     angle: angle, speed: BULLET_SPEED * 0.7,
@@ -454,14 +404,8 @@ function shootAlly(a){
 }
 
 function updateAllies(){
-  const maxOccupancy = 0.60;
-  const idealCol = Math.max(28, Math.floor(CSS_WIDTH * 0.06));
-  const maxColsPossible = Math.min(8, Math.floor(CSS_WIDTH / idealCol));
-  const maxAllowedWidth = Math.floor(CSS_WIDTH * maxOccupancy);
-  const cols = Math.max(1, Math.min(maxColsPossible, Math.ceil(allies.length / 1)));
-  const colWidth = Math.max(28, Math.min(idealCol, Math.floor(maxAllowedWidth / Math.max(1, Math.min(cols, maxColsPossible)))));
-  const maxPerRow = Math.max(3, Math.min(maxColsPossible, Math.floor(CSS_WIDTH / colWidth)));
-
+  const colWidth = 36;
+  const maxPerRow = 6;
   allies.forEach((a,i)=>{
     const col = i % maxPerRow;
     const row = Math.floor(i / maxPerRow);
@@ -489,7 +433,7 @@ function spawnLevelUpEffect(x,y,text="Level Up!"){
 }
 
 function checkEnemyReachedBottom(){
-  const bottomLine = CSS_HEIGHT - 120;
+  const bottomLine = CSS_HEIGHT - 120; // 判定ラインを少し上げる
   for (const g of enemyGroups){
     for (const e of g.enemies){
       const ey = g.y + e.oy;
@@ -499,7 +443,7 @@ function checkEnemyReachedBottom(){
   return false;
 }
 
-/* ====== 更新 / 描画 ====== */
+/* ====== 更新 ====== */
 function update(dt){
   if (isGameOver) return;
   dt = Math.min(dt, 0.05);
@@ -510,7 +454,7 @@ function update(dt){
   const p = progress <= growthDelay ? 0 : (progress - growthDelay) / (1 - growthDelay);
 
   enemySpawnInterval = p === 0 ? 1.2 : Math.max(0.35, 1.2 - Math.pow(p, 1.0) * 1.0);
-  const enemySpeed = (ENEMY_SPEED) + p * 0.35;
+  const enemySpeed = ENEMY_SPEED + p * 0.35;
 
   if (!boss && elapsedTime >= SURVIVE_TIME) spawnBoss();
 
@@ -522,6 +466,7 @@ function update(dt){
     if (boss.deathTimer >= 1.2) {
       isGameOver = true;
       messageEl.textContent = "ボス撃破！クリア！";
+      // DOM overlay を一度だけ表示（canvas 側では描画しない）
       clearOverlay.style.display = 'block';
     }
   }
@@ -540,8 +485,9 @@ function update(dt){
     spawnItem();
   }
 
+  // プレイヤー移動（タッチ追従）
   if (touchX !== null) {
-    const followLerp = 0.36;
+    const followLerp = 0.28;
     player.x += (touchX - player.x) * followLerp;
     player.facing = -Math.PI/2;
   } else {
@@ -550,7 +496,7 @@ function update(dt){
     if (!keys['a'] && !keys['d']) player.facing = -Math.PI/2;
   }
   player.x = Math.max(PLAYER_RADIUS, Math.min(CSS_WIDTH - PLAYER_RADIUS, player.x));
-  player.y = CSS_HEIGHT - Math.round(UNIT * 1.0) - 20;
+  player.y = CSS_HEIGHT - 60;
 
   shootCooldown -= dt;
   let interval = 0.45 - weapon.assault * 0.03;
@@ -605,7 +551,7 @@ function update(dt){
     const s = (typeof it.speed === 'number') ? it.speed : ITEM_SPEED;
     it.y += s;
     if (it.type === 'ally') {
-      if (Math.abs(player.x - it.x) < Math.max(UNIT * 1.2, 40) && Math.abs(player.y - it.y) < Math.max(UNIT * 0.6, 20)) {
+      if (Math.abs(player.x - it.x) < 40 && Math.abs(player.y - it.y) < 20) {
         for (let n=0;n<it.value;n++){
           allies.push({ x: player.x + (Math.random()-0.5)*10, y: player.y + 40 + Math.random()*6 });
         }
@@ -628,7 +574,7 @@ function update(dt){
         const ex = g.x + e.ox + jitter;
         const ey = g.y + e.oy;
         const radius = e.isElite ? ENEMY_RADIUS * 1.6 : ENEMY_RADIUS;
-        const hitThreshold = radius + Math.max(6, Math.floor(CSS_HEIGHT * 0.005));
+        const hitThreshold = radius + 6;
         if (Math.hypot(ex - b.x, ey - b.y) < hitThreshold) {
           e.hp -= 10;
           if (!b.piercing) bullets.splice(bi,1);
@@ -639,7 +585,7 @@ function update(dt){
       }
     }
     if (hit) continue;
-    if (boss && !boss.dead && Math.hypot(boss.x - b.x, boss.y - b.y) < boss.radius + Math.max(6, Math.floor(CSS_HEIGHT * 0.005))) {
+    if (boss && !boss.dead && Math.hypot(boss.x - b.x, boss.y - b.y) < boss.radius + 6) {
       boss.hp -= 10;
       if (!b.piercing) bullets.splice(bi,1);
       if (boss.hp <= 0) { boss.dead = true; spawnExplosion(boss.x, boss.y, "#ffcc66", 80); }
@@ -651,7 +597,7 @@ function update(dt){
     for (let ii = items.length - 1; ii >= 0; ii--) {
       const it = items[ii];
       if (it.type !== 'weapon') continue;
-      if (b.x > it.x - ITEM_WIDTH/2 && b.x < it.x + ITEM_WIDTH/2 && Math.abs(b.y - it.y) < ITEM_HEIGHT) {
+      if (b.x > it.x - 40 && b.x < it.x + 40 && Math.abs(b.y - it.y) < 15) {
         it.guard--;
         bullets.splice(bi,1);
         if (it.guard <= 0) {
@@ -684,11 +630,10 @@ function update(dt){
   killText.textContent = killCount;
 }
 
-/* 描画 */
+/* ====== 描画（CLEARはDOM overlayのみ） ====== */
 function drawHuman(x,y,scale=1,color="#4caf50",gunColor="#333"){
-  const rHead = Math.max(6, Math.floor(PLAYER_RADIUS * 0.5 * scale));
   ctx.fillStyle = color;
-  ctx.beginPath(); ctx.arc(x, y - 18*scale, rHead, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(x, y - 18*scale, 8*scale, 0, Math.PI*2); ctx.fill();
   ctx.fillStyle = color; ctx.fillRect(x - 6*scale, y - 12*scale, 12*scale, 18*scale);
   ctx.fillRect(x - 14*scale, y - 10*scale, 8*scale, 4*scale);
   ctx.fillRect(x + 6*scale, y - 10*scale, 8*scale, 4*scale);
@@ -702,13 +647,13 @@ function draw(){
   ctx.clearRect(0,0,CSS_WIDTH,CSS_HEIGHT);
   ctx.fillStyle = "#151515"; ctx.fillRect(0,0,CSS_WIDTH,CSS_HEIGHT);
 
-  drawHuman(player.x, player.y, 1.0 * (PLAYER_RADIUS / 16), "#4caf50", "#222");
+  drawHuman(player.x, player.y, 1.0, "#4caf50", "#222");
 
-  allies.forEach(a => drawHuman(a.x, a.y, ALLY_SCALE * (PLAYER_RADIUS / 16), "#66bb6a", "#222"));
+  allies.forEach(a => drawHuman(a.x, a.y, 0.8, "#66bb6a", "#222"));
 
   bullets.forEach(b => {
     ctx.fillStyle = b.isAlly ? "#ffd" : "#ffeb3b";
-    ctx.beginPath(); ctx.arc(b.x, b.y, BULLET_RADIUS, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(b.x, b.y, 4, 0, Math.PI*2); ctx.fill();
   });
 
   enemyGroups.forEach(g => {
@@ -730,7 +675,7 @@ function draw(){
 
   if (boss && !boss.dead) {
     ctx.fillStyle = "#ff4444"; ctx.beginPath(); ctx.arc(boss.x, boss.y, boss.radius, 0, Math.PI*2); ctx.fill();
-    ctx.fillStyle = "#fff"; ctx.font = Math.max(12, Math.floor(CSS_WIDTH * 0.03)) + "px sans-serif"; ctx.fillText("Boss HP: " + boss.hp, boss.x - 60, boss.y - boss.radius - 10);
+    ctx.fillStyle = "#fff"; ctx.font = "18px sans-serif"; ctx.fillText("Boss HP: " + boss.hp, boss.x - 60, boss.y - boss.radius - 10);
   }
 
   particles.forEach(p => {
@@ -740,18 +685,18 @@ function draw(){
 
   floatingTexts.forEach(t => {
     const alpha = Math.max(0, 1 - t.life / t.ttl);
-    ctx.globalAlpha = alpha; ctx.fillStyle = "#fff59d"; ctx.font = Math.max(12, Math.floor(CSS_WIDTH * 0.03)) + "px sans-serif";
+    ctx.globalAlpha = alpha; ctx.fillStyle = "#fff59d"; ctx.font = "18px sans-serif";
     ctx.fillText(t.text, t.x - (t.text.length * 5), t.y);
     ctx.globalAlpha = 1;
   });
 
   items.forEach(it => {
     if (it.type === 'weapon') {
-      ctx.fillStyle = "#29b6f6"; ctx.fillRect(it.x - ITEM_WIDTH/2, it.y - ITEM_HEIGHT/2, ITEM_WIDTH, ITEM_HEIGHT);
-      ctx.fillStyle = "#fff"; ctx.font = Math.max(12, Math.floor(CSS_WIDTH * 0.025)) + "px sans-serif"; ctx.fillText("G:" + it.guard, it.x - 15, it.y + 5);
+      ctx.fillStyle = "#29b6f6"; ctx.fillRect(it.x - 40, it.y - 10, 80, 20);
+      ctx.fillStyle = "#fff"; ctx.font = "14px sans-serif"; ctx.fillText("G:" + it.guard, it.x - 15, it.y + 5);
     } else {
-      ctx.fillStyle = "#66ff66"; ctx.fillRect(it.x - ITEM_WIDTH/2, it.y - ITEM_HEIGHT/2, ITEM_WIDTH, ITEM_HEIGHT);
-      ctx.fillStyle = "#000"; ctx.font = Math.max(12, Math.floor(CSS_WIDTH * 0.03)) + "px sans-serif"; ctx.fillText("+" + it.value, it.x - 8, it.y + 6);
+      ctx.fillStyle = "#66ff66"; ctx.fillRect(it.x - 40, it.y - 10, 80, 20);
+      ctx.fillStyle = "#000"; ctx.font = "16px sans-serif"; ctx.fillText("+" + it.value, it.x - 8, it.y + 6);
     }
   });
 
@@ -759,13 +704,19 @@ function draw(){
     ctx.globalAlpha = 0.28;
     ctx.fillStyle = "#88ccff";
     ctx.beginPath();
-    ctx.arc(touchIndicator.x, touchIndicator.y, Math.max(20, Math.floor(CSS_WIDTH * 0.06)), 0, Math.PI*2);
+    ctx.arc(touchIndicator.x, touchIndicator.y, 28, 0, Math.PI*2);
     ctx.fill();
     ctx.globalAlpha = 1;
   }
+
+  // NOTE: CLEAR は canvas 上では描かない（DOM overlay を使う）
+
+  ctx.fillStyle = "#fff";
+  ctx.font = Math.max(12, Math.floor(CSS_WIDTH * 0.03)) + "px sans-serif";
+  ctx.fillText("HP: " + Math.max(0, Math.floor(player.hp)), 10, 18);
 }
 
-/* メインループ */
+/* ====== メインループ ====== */
 function gameLoop(now){
   const t = now || performance.now();
   const dt = Math.min((t - lastTime) / 1000, 0.05);
@@ -779,8 +730,7 @@ function gameLoop(now){
 
 /* 起動 */
 function start() {
-  attachViewportListeners();
-  resizeCanvasToFitStage();
+  resizeCanvasToDisplaySize();
   resetGame();
   requestAnimationFrame((t) => { lastTime = t; gameLoop(t); });
 }

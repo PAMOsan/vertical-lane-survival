@@ -101,23 +101,16 @@ let touchX = null;
 let touchActive = false;
 let touchIndicator = null;
 
-/* ---------- リサイズ / スケール関連 ---------- */
-function updateScaleDependentSizes() {
-  // CSS_WIDTH / CSS_HEIGHT は論理ステージのピクセル数（STAGE_BASE ベース）
-  // サイズは論理ステージに対する割合で決める（例: プレイヤー半径 = 高さの 0.014）
-  PLAYER_RADIUS = Math.max(10, Math.floor(CSS_HEIGHT * 0.014)); // 調整可能
-  ENEMY_RADIUS = Math.max(8, Math.floor(CSS_HEIGHT * 0.01));
-  BULLET_RADIUS = Math.max(3, Math.floor(CSS_HEIGHT * 0.0035));
-  ALLY_SCALE = Math.max(0.6, Math.min(1.0, CSS_WIDTH / 520)); // 見た目の縮尺
-  BOSS_RADIUS = Math.max(48, Math.floor(CSS_WIDTH * 0.12));
-}
+/* --- 追加: タッチジェスチャの既定動作を無効化（canvas 初期化直後に入れる） */
+canvas.style.touchAction = 'none';
 
+/* --- 置き換え: リサイズ / フィット関数（visualViewport 対応） */
 function resizeCanvasToFitStage() {
-  // 利用可能なビューポート（visualViewport を優先）
+  // visualViewport を優先して利用
   const viewportW = window.visualViewport ? window.visualViewport.width : window.innerWidth;
   const viewportH = window.visualViewport ? window.visualViewport.height : window.innerHeight;
 
-  // UI 要素の高さを差し引く
+  // UI の高さを差し引く
   const uiRect = document.getElementById('ui').getBoundingClientRect();
   const hintRect = document.querySelector('.hint').getBoundingClientRect();
   const reserved = uiRect.height + hintRect.height + 18 + (parseFloat(getComputedStyle(document.body).paddingBottom) || 0);
@@ -125,10 +118,9 @@ function resizeCanvasToFitStage() {
   const availableW = Math.max(320, Math.floor(viewportW - 12));
   const availableH = Math.max(420, Math.floor(viewportH - reserved));
 
-  // ステージ比率
   const stageRatio = STAGE_W / STAGE_H;
 
-  // 画面に収まる最大の幅・高さを計算（レターボックスあり）
+  // 画面に収まる最大の幅・高さを計算（レターボックス）
   let targetW = availableW;
   let targetH = Math.floor(targetW / stageRatio);
   if (targetH > availableH) {
@@ -136,7 +128,7 @@ function resizeCanvasToFitStage() {
     targetW = Math.floor(targetH * stageRatio);
   }
 
-  // CSS 表示サイズを設定（親内で中央に表示）
+  // CSS 表示サイズを設定
   canvas.style.width = targetW + 'px';
   canvas.style.height = targetH + 'px';
 
@@ -149,25 +141,44 @@ function resizeCanvasToFitStage() {
   canvas.width = Math.floor(CSS_WIDTH * dpr);
   canvas.height = Math.floor(CSS_HEIGHT * dpr);
 
-  // ctx.setTransform: マッピングを行う
+  // マッピング（CSS表示サイズ <-> 論理サイズ）
   const scaleX = (dpr * targetW) / CSS_WIDTH;
   const scaleY = (dpr * targetH) / CSS_HEIGHT;
   ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0);
 
-  // スケール依存のサイズを更新（論理座標系での半径など）
-  updateScaleDependentSizes();
+  // スケール依存サイズを更新（あれば）
+  if (typeof updateScaleDependentSizes === 'function') updateScaleDependentSizes();
+
+  // プレイヤー等の位置補正
+  if (player) {
+    player.x = Math.max(PLAYER_RADIUS, Math.min(CSS_WIDTH - PLAYER_RADIUS, player.x));
+    player.y = CSS_HEIGHT - 60;
+  }
 }
 
-/* クライアント座標 -> 論理ステージ座標 */
+/* --- 置き換え: client -> 論理座標変換（visualViewport のオフセットを考慮） */
 function clientXToCanvasX(clientX) {
   const rect = canvas.getBoundingClientRect();
-  const x = (clientX - rect.left) * (CSS_WIDTH / rect.width);
+  // visualViewport のオフセットを考慮（in-app browser 対応）
+  const offsetLeft = (window.visualViewport && typeof window.visualViewport.offsetLeft === 'number') ? window.visualViewport.offsetLeft : 0;
+  const x = (clientX - rect.left + offsetLeft) * (CSS_WIDTH / rect.width);
   return Math.max(PLAYER_RADIUS, Math.min(CSS_WIDTH - PLAYER_RADIUS, x));
 }
 function clientYToCanvasY(clientY) {
   const rect = canvas.getBoundingClientRect();
-  const y = (clientY - rect.top) * (CSS_HEIGHT / rect.height);
+  const offsetTop = (window.visualViewport && typeof window.visualViewport.offsetTop === 'number') ? window.visualViewport.offsetTop : 0;
+  const y = (clientY - rect.top + offsetTop) * (CSS_HEIGHT / rect.height);
   return Math.max(0, Math.min(CSS_HEIGHT, y));
+}
+
+/* --- 追加: visualViewport の変化に追従するリスナを登録する関数 --- */
+function attachViewportListeners() {
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', () => { setTimeout(resizeCanvasToFitStage, 60); });
+    window.visualViewport.addEventListener('scroll', () => { setTimeout(resizeCanvasToFitStage, 60); });
+  }
+  window.addEventListener('orientationchange', () => { setTimeout(resizeCanvasToFitStage, 120); });
+  window.addEventListener('resize', () => { setTimeout(resizeCanvasToFitStage, 60); });
 }
 
 /* ---------- 初期化（ゲームロジックは変更なし） ---------- */

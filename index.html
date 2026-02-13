@@ -3,16 +3,14 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
-<title>Vertical Lane Survival - スマホ対応版（タッチ操作）</title>
+<title>Vertical Lane Survival - レスポンシブ版</title>
 <style>
   html,body { height:100%; margin:0; background:#0b0b0b; color:#fff; font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; -webkit-tap-highlight-color: transparent; }
-  #container { width:100%; max-width:480px; margin:12px auto; }
+  #container { width:100%; max-width:480px; margin:12px auto; box-sizing:border-box; padding:0 8px; }
   #ui { display:flex; gap:8px; align-items:center; justify-content:space-between; margin-bottom:8px; }
-  #game { display:block; width:100%; background:#151515; border:4px solid #333; box-sizing:border-box; }
+  #game { display:block; width:100%; background:#151515; border:4px solid #333; box-sizing:border-box; touch-action:none; }
   button { padding:6px 10px; background:#1f6feb; color:#fff; border:0; border-radius:6px; cursor:pointer; }
   .info { font-size:14px; color:#ddd; }
-  #message { text-align:center; margin-top:8px; color:#ffd; min-height:20px; }
-  /* タッチ操作の説明（小さく） */
   .hint { font-size:12px; color:#bbb; margin-top:6px; text-align:center; }
 </style>
 </head>
@@ -22,13 +20,18 @@
       <div class="info">武器: <span id="weaponText">ハンドガン</span>　仲間: <span id="allyText">0</span>　Kill: <span id="killText">0</span></div>
       <div><button id="restartBtn">Restart</button></div>
     </div>
+    <!-- CSS幅は100%にしておき、内部解像度は JS で調整 -->
     <canvas id="game" width="450" height="800"></canvas>
     <div id="message"></div>
-    <div class="hint">画面をタッチして指を置いた位置にキャラが移動します（下のレーンに張り付き）</div>
+    <div class="hint">画面をタッチして指を置いた位置にキャラが移動します</div>
   </div>
 
 <script>
-/* ====== スマホ対応版（タッチで指のXに追従） ====== */
+/* ====== レスポンシブ対応のポイント ======
+   - canvas.style.width を 100% にして CSS 上の幅を決める
+   - 内部ピクセル解像度は devicePixelRatio を考慮して canvas.width/height を設定
+   - ctx.setTransform(dpr,0,0,dpr,0,0) で描画をスケーリング（以降は CSS ピクセル単位で描画可能）
+*/
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -39,11 +42,13 @@ const allyText = document.getElementById('allyText');
 const messageEl = document.getElementById('message');
 const restartBtn = document.getElementById('restartBtn');
 
-const WIDTH = canvas.width, HEIGHT = canvas.height;
+let CSS_WIDTH = 450;   // 基準の論理幅（デザイン幅）
+let CSS_HEIGHT = 800;  // 基準の論理高さ（デザイン高さ）
 
+// ゲーム設定（以前と同じ）
 const PLAYER_SPEED = 4;
 const PLAYER_RADIUS = 16;
-const BULLET_SPEED = 600; // px/s
+const BULLET_SPEED = 600;
 let ENEMY_SPEED = 0.9;
 const ITEM_SPEED = 0.55;
 const ENEMY_RADIUS = 11;
@@ -72,14 +77,46 @@ let floatingTexts = [];
 
 let weapon = { shotgun: 0, assault: 0, laser: 0, missile: 0 };
 
-/* ====== タッチ制御変数 ====== */
-let touchX = null;           // キャンバス座標でのターゲットX（null = タッチなし）
-let touchActive = false;     // タッチ中フラグ
-let touchIndicator = null;   // {x,y} を描画するための位置（画面上の指位置）
+// タッチ制御
+let touchX = null;
+let touchActive = false;
+let touchIndicator = null;
 
-/* ====== 初期化 ====== */
+/* ====== レスポンシブリサイズ関数 ====== */
+function resizeCanvasToDisplaySize() {
+  // CSS上の幅を親コンテナに合わせる（canvas.style.width = '100%' を利用）
+  // ここでは canvas のクライアント幅を基準に内部ピクセル解像度を設定
+  const rect = canvas.getBoundingClientRect();
+  const cssW = Math.max(100, Math.floor(rect.width)); // 最小幅を確保
+  const aspect = CSS_HEIGHT / CSS_WIDTH;
+  const cssH = Math.floor(cssW * aspect);
+
+  // devicePixelRatio を考慮して内部解像度を設定
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  canvas.style.width = cssW + 'px';
+  canvas.style.height = cssH + 'px';
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+
+  // 以降の描画は CSS ピクセル単位で行えるように変換
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+// 座標変換：クライアント座標 -> キャンバスの論理（CSS）座標
+function clientXToCanvasX(clientX) {
+  const rect = canvas.getBoundingClientRect();
+  const x = (clientX - rect.left) * (CSS_WIDTH / rect.width);
+  return Math.max(PLAYER_RADIUS, Math.min(CSS_WIDTH - PLAYER_RADIUS, x));
+}
+function clientYToCanvasY(clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const y = (clientY - rect.top) * (CSS_HEIGHT / rect.height);
+  return Math.max(0, Math.min(CSS_HEIGHT, y));
+}
+
+/* ====== 初期化 / イベント ====== */
 function resetGame() {
-  player = { x: WIDTH/2, y: HEIGHT - 40, hp: 100, facing: -Math.PI/2 };
+  player = { x: CSS_WIDTH/2, y: CSS_HEIGHT - 40, hp: 100, facing: -Math.PI/2 };
   bullets = [];
   enemyGroups = [];
   items = [];
@@ -98,30 +135,13 @@ function resetGame() {
   allyText.textContent = allies.length;
   weaponText.textContent = "ハンドガン";
   messageEl.textContent = "";
-  touchX = null;
-  touchActive = false;
-  touchIndicator = null;
+  touchX = null; touchActive = false; touchIndicator = null;
 }
 restartBtn.addEventListener('click', resetGame);
-
-/* キーボード（デスクトップ用） */
 window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
 window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
-/* ====== タッチ / ポインターイベント ====== */
-/* ユーザーがタッチした位置をキャンバス座標に変換して touchX に保存する */
-function clientXToCanvasX(clientX) {
-  const rect = canvas.getBoundingClientRect();
-  const x = (clientX - rect.left) * (canvas.width / rect.width);
-  return Math.max(PLAYER_RADIUS, Math.min(canvas.width - PLAYER_RADIUS, x));
-}
-function clientYToCanvasY(clientY) {
-  const rect = canvas.getBoundingClientRect();
-  const y = (clientY - rect.top) * (canvas.height / rect.height);
-  return Math.max(0, Math.min(canvas.height, y));
-}
-
-/* タッチイベント */
+// タッチ / ポインタイベント（レスポンシブ対応）
 canvas.addEventListener('touchstart', (ev) => {
   ev.preventDefault();
   const t = ev.touches[0];
@@ -145,7 +165,6 @@ canvas.addEventListener('touchend', (ev) => {
   touchIndicator = null;
 }, { passive: false });
 
-/* ポインター（マウス）対応：デスクトップでも同じ操作感 */
 canvas.addEventListener('pointerdown', (ev) => {
   ev.preventDefault();
   touchX = clientXToCanvasX(ev.clientX);
@@ -171,8 +190,13 @@ canvas.addEventListener('pointercancel', (ev) => {
   touchIndicator = null;
 });
 
-/* ====== 既存ゲームロジック（敵生成・弾・アイテム等） ====== */
-/* 敵群れ生成（端寄せ防止・上端補正） */
+// ウィンドウリサイズでキャンバスを再設定
+window.addEventListener('resize', () => {
+  resizeCanvasToDisplaySize();
+});
+
+/* ====== 以降は既存のゲームロジック（弾は真上） ====== */
+/* 敵群れ生成（省略せずに実装） */
 function spawnEnemyGroup() {
   const totalEnemies = enemyGroups.reduce((s,g)=>s+g.enemies.length,0);
   const TOTAL_ENEMY_CAP = 120;
@@ -183,12 +207,12 @@ function spawnEnemyGroup() {
   const p = progress <= growthDelay ? 0 : (progress - growthDelay) / (1 - growthDelay);
 
   const bandMin = 0.30, bandMax = 0.90;
-  const bandWidth = WIDTH * (bandMin + (bandMax - bandMin) * Math.pow(progress, 1.2));
-  const bandStart = Math.random() * Math.max(0, WIDTH - bandWidth);
+  const bandWidth = CSS_WIDTH * (bandMin + (bandMax - bandMin) * Math.pow(progress, 1.2));
+  const bandStart = Math.random() * Math.max(0, CSS_WIDTH - bandWidth);
   let centerX = bandStart + bandWidth / 2;
 
   const edgeMargin = Math.max(40, ENEMY_RADIUS * 2);
-  centerX = Math.min(Math.max(centerX, edgeMargin), WIDTH - edgeMargin);
+  centerX = Math.min(Math.max(centerX, edgeMargin), CSS_WIDTH - edgeMargin);
 
   const group = { x: centerX, y: -40, enemies: [] };
 
@@ -203,7 +227,7 @@ function spawnEnemyGroup() {
   const hpScale = 1 + p * 1.0;
 
   const rMinStart = 6, rMaxStart = 10;
-  const rMinEnd = 20, rMaxEnd = Math.min(WIDTH * 0.4, 90);
+  const rMinEnd = 20, rMaxEnd = Math.min(CSS_WIDTH * 0.4, 90);
   const rMin = rMinStart + (rMinEnd - rMinStart) * progress;
   const rMax = rMaxStart + (rMaxEnd - rMaxStart) * progress;
 
@@ -216,7 +240,7 @@ function spawnEnemyGroup() {
     let oy = Math.sin(ang) * r;
 
     const minOx = edgeMargin - group.x + localMargin;
-    const maxOx = (WIDTH - edgeMargin) - group.x - localMargin;
+    const maxOx = (CSS_WIDTH - edgeMargin) - group.x - localMargin;
     ox = Math.min(Math.max(ox, minOx), maxOx);
 
     const baseHP = baseEnemyHPMin + Math.floor(Math.random() * (baseEnemyHPMax - baseEnemyHPMin + 1));
@@ -232,7 +256,7 @@ function spawnEnemyGroup() {
     for (let k=0;k<extra;k++){
       const ox = (Math.random()-0.5) * Math.min(bandWidth, 200);
       const oy = (Math.random()-0.5) * Math.min(rMax, 120);
-      const clampedOx = Math.min(Math.max(ox, edgeMargin - group.x + localMargin), (WIDTH - edgeMargin) - group.x - localMargin);
+      const clampedOx = Math.min(Math.max(ox, edgeMargin - group.x + localMargin), (CSS_WIDTH - edgeMargin) - group.x - localMargin);
       const eliteBase = 160 + Math.random() * 80;
       const eliteHp = Math.floor(eliteBase * (1 + p * 0.6));
       group.enemies.push({ ox: clampedOx, oy, jitterPhase: Math.random() * Math.PI * 2, hp: eliteHp, isElite: true });
@@ -244,15 +268,14 @@ function spawnEnemyGroup() {
   const spawnOffset = 18;
   group.y = -spawnOffset - minOy;
 
-  group.x = Math.min(Math.max(group.x, edgeMargin), WIDTH - edgeMargin);
+  group.x = Math.min(Math.max(group.x, edgeMargin), CSS_WIDTH - edgeMargin);
 
   enemyGroups.push(group);
 }
 
-/* ボス生成 */
 function spawnBoss() {
   boss = {
-    x: WIDTH/2,
+    x: CSS_WIDTH/2,
     y: -120,
     hp: 22000 + Math.floor(Math.random()*6000),
     speed: 0.5,
@@ -262,12 +285,11 @@ function spawnBoss() {
   };
 }
 
-/* アイテム生成 */
 function spawnItem() {
   if (boss && !boss.dead) return;
 
   const edgeMargin = 40;
-  const x = Math.min(Math.max(Math.random() * WIDTH, edgeMargin), WIDTH - edgeMargin);
+  const x = Math.min(Math.max(Math.random() * CSS_WIDTH, edgeMargin), CSS_WIDTH - edgeMargin);
   const progress = Math.min(elapsedTime / SURVIVE_TIME, 1);
   const allyProb = 0.40;
   const baseItemSpeed = ITEM_SPEED;
@@ -294,7 +316,6 @@ function spawnItem() {
   items.push({ x, y: -20, type: "weapon", guard, speed: baseItemSpeed });
 }
 
-/* 武器強化 */
 function upgradeWeapon() {
   const roll = Math.random();
   if (roll < 0.25) { weapon.shotgun++; weaponText.textContent = "ショットガン Lv" + weapon.shotgun; }
@@ -303,13 +324,12 @@ function upgradeWeapon() {
   else { weapon.missile++; weaponText.textContent = "ミサイル Lv" + weapon.missile; }
 }
 
-/* 発射（常に真上） */
 function computeGunTip(x,y,facing,ownerRadius){
   const offset = ownerRadius + 8;
   return { tx: x + Math.cos(facing)*offset, ty: y + Math.sin(facing)*offset };
 }
 function shootPlayer(x,y){
-  const angle = -Math.PI/2; // 真上
+  const angle = -Math.PI/2;
   const tip = computeGunTip(x, y-6, angle, PLAYER_RADIUS);
   const speed = BULLET_SPEED;
   const piercing = weapon.laser > 0;
@@ -334,7 +354,6 @@ function shootAlly(a){
   });
 }
 
-/* 仲間更新 */
 function updateAllies(){
   const colWidth = 36;
   const maxPerRow = 6;
@@ -351,7 +370,6 @@ function updateAllies(){
   });
 }
 
-/* 爆発パーティクル */
 function spawnExplosion(x,y,color="#ffcc66",count=40){
   for (let i=0;i<count;i++){
     const ang = Math.random()*Math.PI*2;
@@ -360,15 +378,13 @@ function spawnExplosion(x,y,color="#ffcc66",count=40){
   }
 }
 
-/* レベルアップ演出 */
 function spawnLevelUpEffect(x,y,text="Level Up!"){
   spawnExplosion(x,y,"#ffd166",14);
   floatingTexts.push({ x, y, text, life:0, ttl:1.2, vy:-30 });
 }
 
-/* 敵が下ラインに到達したら敗北判定 */
 function checkEnemyReachedBottom(){
-  const bottomLine = HEIGHT - 90;
+  const bottomLine = CSS_HEIGHT - 90;
   for (const g of enemyGroups){
     for (const e of g.enemies){
       const ey = g.y + e.oy;
@@ -378,10 +394,9 @@ function checkEnemyReachedBottom(){
   return false;
 }
 
-/* ====== 更新 ====== */
+/* ====== 更新 / 描画（CSSピクセル単位で扱う） ====== */
 function update(dt){
   if (isGameOver) return;
-
   dt = Math.min(dt, 0.05);
   elapsedTime += dt;
 
@@ -419,25 +434,19 @@ function update(dt){
     spawnItem();
   }
 
-  // プレイヤー移動：タッチがあれば touchX に滑らかに追従（下レーンに張り付き）
+  // プレイヤー移動：タッチがあれば touchX に滑らかに追従
   if (touchX !== null) {
-    // 追従速度（0..1）を調整すると追従の速さが変わる
-    const followLerp = 0.28; // 小さくするとゆっくり、大きくすると瞬間移動に近い
+    const followLerp = 0.28;
     player.x += (touchX - player.x) * followLerp;
-    // プレイヤーの向きは固定（見た目）
     player.facing = -Math.PI/2;
   } else {
-    // キーボード操作（デスクトップ）
     if (keys['a'] || keys['arrowleft']) { player.x -= PLAYER_SPEED; player.facing = -Math.PI/2 - 0.25; }
     if (keys['d'] || keys['arrowright']) { player.x += PLAYER_SPEED; player.facing = -Math.PI/2 + 0.25; }
     if (!keys['a'] && !keys['d']) player.facing = -Math.PI/2;
   }
-  // clamp X
-  player.x = Math.max(PLAYER_RADIUS, Math.min(WIDTH - PLAYER_RADIUS, player.x));
-  // ensure player stays on bottom lane
-  player.y = HEIGHT - 40;
+  player.x = Math.max(PLAYER_RADIUS, Math.min(CSS_WIDTH - PLAYER_RADIUS, player.x));
+  player.y = CSS_HEIGHT - 40;
 
-  // auto shooting
   shootCooldown -= dt;
   let interval = 0.45 - weapon.assault * 0.03;
   if (interval < 0.12) interval = 0.12;
@@ -448,16 +457,14 @@ function update(dt){
 
   updateAllies();
 
-  // 弾更新（角度/速度固定で直進）
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
     b.x += Math.cos(b.angle) * b.speed * dt;
     b.y += Math.sin(b.angle) * b.speed * dt;
     if (b.createdAt && b.life && (performance.now() - b.createdAt > b.life)) { bullets.splice(i,1); continue; }
-    if (b.y < -80 || b.y > HEIGHT + 80 || b.x < -80 || b.x > WIDTH + 80) { bullets.splice(i,1); continue; }
+    if (b.y < -80 || b.y > CSS_HEIGHT + 80 || b.x < -80 || b.x > CSS_WIDTH + 80) { bullets.splice(i,1); continue; }
   }
 
-  // 敵更新
   for (let gi = enemyGroups.length - 1; gi >= 0; gi--) {
     const g = enemyGroups[gi];
     g.y += enemySpeed;
@@ -471,7 +478,7 @@ function update(dt){
         if (player.hp <= 0) { isGameOver = true; messageEl.textContent = "ゲームオーバー"; }
       }
     }
-    if (g.y > HEIGHT + 120 || g.enemies.length === 0) enemyGroups.splice(gi,1);
+    if (g.y > CSS_HEIGHT + 120 || g.enemies.length === 0) enemyGroups.splice(gi,1);
   }
 
   if (checkEnemyReachedBottom()) {
@@ -488,7 +495,6 @@ function update(dt){
     }
   }
 
-  // items update
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i];
     const s = (typeof it.speed === 'number') ? it.speed : ITEM_SPEED;
@@ -503,10 +509,10 @@ function update(dt){
         continue;
       }
     }
-    if (it.y > HEIGHT + 80) items.splice(i,1);
+    if (it.y > CSS_HEIGHT + 80) items.splice(i,1);
   }
 
-  // 弾と敵の当たり判定（群れ & ボス）
+  // 当たり判定（省略せずに実行）
   for (let bi = bullets.length - 1; bi >= 0; bi--) {
     const b = bullets[bi];
     let hit = false;
@@ -536,7 +542,6 @@ function update(dt){
     }
   }
 
-  // 弾と武器バーの当たり判定（ガード削り）
   for (let bi = bullets.length - 1; bi >= 0; bi--) {
     const b = bullets[bi];
     for (let ii = items.length - 1; ii >= 0; ii--) {
@@ -555,7 +560,6 @@ function update(dt){
     }
   }
 
-  // particles update
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
     p.x += p.vx;
@@ -565,7 +569,6 @@ function update(dt){
     if (p.life >= p.ttl) particles.splice(i,1);
   }
 
-  // floating texts update
   for (let i = floatingTexts.length - 1; i >= 0; i--) {
     const t = floatingTexts[i];
     t.life += dt;
@@ -577,7 +580,6 @@ function update(dt){
   killText.textContent = killCount;
 }
 
-/* ====== 描画 ====== */
 function drawHuman(x,y,scale=1,color="#4caf50",gunColor="#333"){
   ctx.fillStyle = color;
   ctx.beginPath(); ctx.arc(x, y - 18*scale, 8*scale, 0, Math.PI*2); ctx.fill();
@@ -591,22 +593,19 @@ function drawHuman(x,y,scale=1,color="#4caf50",gunColor="#333"){
 }
 
 function draw(){
-  ctx.clearRect(0,0,WIDTH,HEIGHT);
-  ctx.fillStyle = "#151515"; ctx.fillRect(0,0,WIDTH,HEIGHT);
+  // 画面は CSS ピクセル単位（ctx.setTransform で DPR を吸収済み）
+  ctx.clearRect(0,0,CSS_WIDTH,CSS_HEIGHT);
+  ctx.fillStyle = "#151515"; ctx.fillRect(0,0,CSS_WIDTH,CSS_HEIGHT);
 
-  // player
   drawHuman(player.x, player.y, 1.0, "#4caf50", "#222");
 
-  // allies
   allies.forEach(a => drawHuman(a.x, a.y, 0.8, "#66bb6a", "#222"));
 
-  // bullets
   bullets.forEach(b => {
     ctx.fillStyle = b.isAlly ? "#ffd" : "#ffeb3b";
     ctx.beginPath(); ctx.arc(b.x, b.y, 4, 0, Math.PI*2); ctx.fill();
   });
 
-  // enemies
   enemyGroups.forEach(g => {
     g.enemies.forEach(e => {
       const jitter = Math.sin(elapsedTime * 2 + e.jitterPhase) * 3;
@@ -624,19 +623,16 @@ function draw(){
     });
   });
 
-  // boss
   if (boss && !boss.dead) {
     ctx.fillStyle = "#ff4444"; ctx.beginPath(); ctx.arc(boss.x, boss.y, boss.radius, 0, Math.PI*2); ctx.fill();
     ctx.fillStyle = "#fff"; ctx.font = "18px sans-serif"; ctx.fillText("Boss HP: " + boss.hp, boss.x - 60, boss.y - boss.radius - 10);
   }
 
-  // particles
   particles.forEach(p => {
     ctx.fillStyle = p.color; ctx.globalAlpha = Math.max(0, 1 - p.life / p.ttl);
     ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI*2); ctx.fill(); ctx.globalAlpha = 1;
   });
 
-  // floating texts
   floatingTexts.forEach(t => {
     const alpha = Math.max(0, 1 - t.life / t.ttl);
     ctx.globalAlpha = alpha; ctx.fillStyle = "#fff59d"; ctx.font = "18px sans-serif";
@@ -644,7 +640,6 @@ function draw(){
     ctx.globalAlpha = 1;
   });
 
-  // items
   items.forEach(it => {
     if (it.type === 'weapon') {
       ctx.fillStyle = "#29b6f6"; ctx.fillRect(it.x - 40, it.y - 10, 80, 20);
@@ -655,7 +650,6 @@ function draw(){
     }
   });
 
-  // touch indicator（指を置いた位置を表示）
   if (touchIndicator) {
     ctx.globalAlpha = 0.28;
     ctx.fillStyle = "#88ccff";
@@ -665,7 +659,6 @@ function draw(){
     ctx.globalAlpha = 1;
   }
 
-  // HUD
   ctx.fillStyle = "#fff"; ctx.font = "14px sans-serif";
   ctx.fillText("HP: " + Math.max(0, Math.floor(player.hp)), 10, 18);
 }
@@ -682,9 +675,15 @@ function gameLoop(now){
   requestAnimationFrame(gameLoop);
 }
 
-/* ====== スタート ====== */
-resetGame();
-requestAnimationFrame((t) => { lastTime = t; gameLoop(t); });
+/* ====== 起動処理 ====== */
+function start() {
+  // 初回リサイズ
+  resizeCanvasToDisplaySize();
+  // 初期プレイヤー位置を CSS 単位に合わせる
+  resetGame();
+  requestAnimationFrame((t) => { lastTime = t; gameLoop(t); });
+}
+start();
 
 </script>
 </body>

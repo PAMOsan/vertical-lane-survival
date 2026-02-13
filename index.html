@@ -685,22 +685,6 @@ function draw(){
     ctx.globalAlpha = 1;
   }
 
-  // CLEAR を canvas 上にも描画（overlay 要素は補助）
-  if (isGameOver && boss && boss.dead) {
-    // 半透明の暗い背景
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.fillRect(0, 0, CSS_WIDTH, CSS_HEIGHT);
-    // 大きな CLEAR テキスト
-    ctx.fillStyle = "#fff59d";
-    ctx.font = Math.max(28, Math.floor(CSS_WIDTH * 0.12)) + "px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.shadowColor = "rgba(0,0,0,0.8)";
-    ctx.shadowBlur = 18;
-    ctx.fillText("CLEAR!!", CSS_WIDTH / 2, CSS_HEIGHT / 2);
-    ctx.shadowBlur = 0;
-    ctx.textAlign = "start";
-  }
 
   ctx.fillStyle = "#fff"; ctx.font = "14px sans-serif";
   ctx.fillText("HP: " + Math.max(0, Math.floor(player.hp)), 10, 18);

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Vertical Lane Survival - ハンドガン調整版</title>
+<title>Vertical Lane Survival - 弾は常に真上へ</title>
 <style>
   html,body { height:100%; margin:0; background:#0b0b0b; color:#fff; font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
   #ui { width:480px; margin:12px auto 6px; display:flex; gap:8px; align-items:center; justify-content:space-between; }
@@ -22,7 +22,11 @@
   <div id="message"></div>
 
 <script>
-/* ====== 設定（ハンドガン遅め・中盤終盤出現率増加） ====== */
+/*
+  このバージョンでは「弾は常に真上（画面上方向）にまっすぐ飛ぶ」ように固定しています。
+  発射時に angle を -Math.PI/2 に固定し、以降の移動は angle と speed のみで行います。
+*/
+
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const WIDTH = canvas.width, HEIGHT = canvas.height;
@@ -35,12 +39,11 @@ const restartBtn = document.getElementById('restartBtn');
 
 const PLAYER_SPEED = 4;
 const PLAYER_RADIUS = 16;
-// 弾はピクセル/秒で扱う（発射時に angle/speed を固定）
-const BULLET_SPEED = 600;
+const BULLET_SPEED = 600; // px/s
 let ENEMY_SPEED = 0.9;
 const ITEM_SPEED = 0.55;
 const ENEMY_RADIUS = 11;
-const SURVIVE_TIME = 60; // 秒でボス出現
+const SURVIVE_TIME = 60;
 
 let keys = {};
 let lastTime = performance.now();
@@ -52,7 +55,7 @@ let itemSpawnInterval = 2.5;
 let shootCooldown = 0;
 
 let player;
-let bullets = [];
+let bullets = [];       // { x,y, angle, speed, piercing, isAlly, createdAt, life }
 let enemyGroups = [];
 let items = [];
 let allies = [];
@@ -63,7 +66,6 @@ let boss = null;
 let particles = [];
 let floatingTexts = [];
 
-// 初期武器はハンドガン（weapon の各種は 0）
 let weapon = { shotgun: 0, assault: 0, laser: 0, missile: 0 };
 
 /* ====== 初期化 ====== */
@@ -92,9 +94,8 @@ restartBtn.addEventListener('click', resetGame);
 window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
 window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
-/* ====== 敵群れ生成（易しめ・安定化） ====== */
+/* ====== 敵群れ生成（安定化） ====== */
 function spawnEnemyGroup() {
-  // safety: limit total enemy count to avoid freeze
   const totalEnemies = enemyGroups.reduce((s,g)=>s+g.enemies.length,0);
   const TOTAL_ENEMY_CAP = 120;
   if (totalEnemies >= TOTAL_ENEMY_CAP) return;
@@ -103,32 +104,26 @@ function spawnEnemyGroup() {
   const growthDelay = 0.45;
   const p = progress <= growthDelay ? 0 : (progress - growthDelay) / (1 - growthDelay);
 
-  // band width
   const bandMin = 0.30, bandMax = 0.90;
   const bandWidth = WIDTH * (bandMin + (bandMax - bandMin) * Math.pow(progress, 1.2));
   const bandStart = Math.random() * Math.max(0, WIDTH - bandWidth);
   let centerX = bandStart + bandWidth / 2;
 
-  const edgeMargin = Math.max(44, ENEMY_RADIUS * 2);
+  const edgeMargin = Math.max(40, ENEMY_RADIUS * 2);
   centerX = Math.min(Math.max(centerX, edgeMargin), WIDTH - edgeMargin);
 
   const group = { x: centerX, y: -40, enemies: [] };
 
-  // base count
   const baseMin = 2, baseMax = 4;
   const raw = baseMin + Math.floor(Math.random() * (baseMax - baseMin + 1));
-
-  // scale with cap (中盤終盤でやや多めに)
-  const maxMultiplier = 4.5; // 少し増やす（中盤終盤の出現率を増やす）
+  const maxMultiplier = 4.5;
   const scale = 0.3 + Math.pow(p, 1.2) * (maxMultiplier - 0.3);
   const maxCountCap = 14;
   const count = Math.min(maxCountCap, Math.max(1, Math.floor(raw * scale)));
 
-  // hp scale (控えめ)
   const baseEnemyHPMin = 6, baseEnemyHPMax = 12;
   const hpScale = 1 + p * 1.0;
 
-  // radius bounds
   const rMinStart = 6, rMaxStart = 10;
   const rMinEnd = 20, rMaxEnd = Math.min(WIDTH * 0.4, 90);
   const rMin = rMinStart + (rMinEnd - rMinStart) * progress;
@@ -142,7 +137,6 @@ function spawnEnemyGroup() {
     let ox = Math.cos(ang) * r;
     let oy = Math.sin(ang) * r;
 
-    // clamp horizontally
     const minOx = edgeMargin - group.x + localMargin;
     const maxOx = (WIDTH - edgeMargin) - group.x - localMargin;
     ox = Math.min(Math.max(ox, minOx), maxOx);
@@ -152,7 +146,6 @@ function spawnEnemyGroup() {
     group.enemies.push({ ox, oy, jitterPhase: Math.random() * Math.PI * 2, hp });
   }
 
-  // elites: 低め
   let eliteChance = 0;
   if (p > 0) eliteChance = 0.02 + Math.pow(p, 1.2) * 0.08;
   const maxElitePerGroup = 1;
@@ -168,7 +161,6 @@ function spawnEnemyGroup() {
     }
   }
 
-  // ensure topmost enemy spawns above screen
   let minOy = Infinity;
   for (const e of group.enemies) if (e.oy < minOy) minOy = e.oy;
   const spawnOffset = 18;
@@ -179,7 +171,7 @@ function spawnEnemyGroup() {
   enemyGroups.push(group);
 }
 
-/* ====== ボス生成（既存アイテムは消さない） ====== */
+/* ====== ボス生成 ====== */
 function spawnBoss() {
   boss = {
     x: WIDTH/2,
@@ -192,7 +184,7 @@ function spawnBoss() {
   };
 }
 
-/* ====== アイテム生成（仲間速度に統一） ====== */
+/* ====== アイテム生成 ====== */
 function spawnItem() {
   if (boss && !boss.dead) return;
 
@@ -208,7 +200,6 @@ function spawnItem() {
     return;
   }
 
-  // weapon guard scaling (控えめ)
   const growthDelay = 0.6;
   const p = progress <= growthDelay ? 0 : (progress - growthDelay) / (1 - growthDelay);
   const guardMin = 6, guardMid = 40, guardMax = 180;
@@ -225,7 +216,7 @@ function spawnItem() {
   items.push({ x, y: -20, type: "weapon", guard, speed: baseItemSpeed });
 }
 
-/* ====== 武器強化（B方式） ====== */
+/* ====== 武器強化 ====== */
 function upgradeWeapon() {
   const roll = Math.random();
   if (roll < 0.25) { weapon.shotgun++; weaponText.textContent = "ショットガン Lv" + weapon.shotgun; }
@@ -234,19 +225,19 @@ function upgradeWeapon() {
   else { weapon.missile++; weaponText.textContent = "ミサイル Lv" + weapon.missile; }
 }
 
-/* ====== 発射（角度/速度固定で直進） ====== */
+/* ====== 発射（常に真上） ====== */
 function computeGunTip(x,y,facing,ownerRadius){
   const offset = ownerRadius + 8;
   return { tx: x + Math.cos(facing)*offset, ty: y + Math.sin(facing)*offset };
 }
 function shootPlayer(x,y){
-  const facing = player.facing || -Math.PI/2;
-  const tip = computeGunTip(x, y-6, facing, PLAYER_RADIUS);
+  // ここで angle を常に -Math.PI/2（真上）に固定する
+  const angle = -Math.PI/2;
+  const tip = computeGunTip(x, y-6, angle, PLAYER_RADIUS); // 見た目の銃口位置は facing ではなく angle を使ってもOK
   const speed = BULLET_SPEED;
   const piercing = weapon.laser > 0;
   const count = 1 + weapon.shotgun * 2;
   for (let i=0;i<count;i++){
-    const angle = facing;
     bullets.push({
       x: tip.tx, y: tip.ty,
       angle: angle, speed: speed,
@@ -256,11 +247,11 @@ function shootPlayer(x,y){
   }
 }
 function shootAlly(a){
-  const facing = -Math.PI/2;
-  const tip = computeGunTip(a.x, a.y-4, facing, 10);
+  const angle = -Math.PI/2; // 仲間弾も真上
+  const tip = computeGunTip(a.x, a.y-4, angle, 10);
   bullets.push({
     x: tip.tx, y: tip.ty,
-    angle: facing, speed: BULLET_SPEED * 0.7,
+    angle: angle, speed: BULLET_SPEED * 0.7,
     piercing:false, isAlly:true,
     createdAt: performance.now(), life: 3200
   });
@@ -314,7 +305,6 @@ function checkEnemyReachedBottom(){
 function update(dt){
   if (isGameOver) return;
 
-  // clamp dt to avoid huge jumps
   dt = Math.min(dt, 0.05);
   elapsedTime += dt;
 
@@ -322,16 +312,11 @@ function update(dt){
   const growthDelay = 0.5;
   const p = progress <= growthDelay ? 0 : (progress - growthDelay) / (1 - growthDelay);
 
-  // spawn interval: 初期はゆったり、中盤終盤は増やす（最小を下げて出現率増）
   enemySpawnInterval = p === 0 ? 1.2 : Math.max(0.35, 1.2 - Math.pow(p, 1.0) * 1.0);
-
-  // enemy speed scales mildly but capped
   const enemySpeed = ENEMY_SPEED + p * 0.35;
 
-  // boss spawn
   if (!boss && elapsedTime >= SURVIVE_TIME) spawnBoss();
 
-  // boss death handling
   if (boss && boss.dead) {
     boss.deathTimer += dt;
     if (boss.deathTimer < 0.6 && Math.random() < 0.2) {
@@ -343,7 +328,6 @@ function update(dt){
     }
   }
 
-  // spawn enemy groups if not boss
   if (!boss) {
     spawnTimerEnemy += dt;
     if (spawnTimerEnemy >= enemySpawnInterval) {
@@ -352,22 +336,19 @@ function update(dt){
     }
   }
 
-  // spawn items
   spawnTimerItem += dt;
   if (spawnTimerItem >= itemSpawnInterval) {
     spawnTimerItem = 0;
     spawnItem();
   }
 
-  // player movement
   if (keys['a'] || keys['arrowleft']) { player.x -= PLAYER_SPEED; player.facing = -Math.PI/2 - 0.25; }
   if (keys['d'] || keys['arrowright']) { player.x += PLAYER_SPEED; player.facing = -Math.PI/2 + 0.25; }
   if (!keys['a'] && !keys['d']) player.facing = -Math.PI/2;
   player.x = Math.max(PLAYER_RADIUS, Math.min(WIDTH - PLAYER_RADIUS, player.x));
 
-  // auto shooting: ハンドガン初期は発射間隔を遅めに（ユーザー要望でさらに遅く）
   shootCooldown -= dt;
-  let interval = 0.45 - weapon.assault * 0.03; // 基本0.45s（遅め）
+  let interval = 0.45 - weapon.assault * 0.03;
   if (interval < 0.12) interval = 0.12;
   if (shootCooldown <= 0) {
     shootPlayer(player.x, player.y);
@@ -376,13 +357,14 @@ function update(dt){
 
   updateAllies();
 
-  // bullets update (angle/speed fixed)
+  // --- 弾更新（発射時の angle/speed のみで移動） ---
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
     b.x += Math.cos(b.angle) * b.speed * dt;
     b.y += Math.sin(b.angle) * b.speed * dt;
+
     if (b.createdAt && b.life && (performance.now() - b.createdAt > b.life)) { bullets.splice(i,1); continue; }
-    if (b.y < -80 || b.y > HEIGHT + 80 || b.x < -80 || b.x > WIDTH + 80) bullets.splice(i,1);
+    if (b.y < -80 || b.y > HEIGHT + 80 || b.x < -80 || b.x > WIDTH + 80) { bullets.splice(i,1); continue; }
   }
 
   // enemy groups update
@@ -402,14 +384,12 @@ function update(dt){
     if (g.y > HEIGHT + 120 || g.enemies.length === 0) enemyGroups.splice(gi,1);
   }
 
-  // check bottom reach
   if (checkEnemyReachedBottom()) {
     isGameOver = true;
     messageEl.textContent = "敵が到達しました…ゲームオーバー";
     return;
   }
 
-  // boss update
   if (boss && !boss.dead) {
     boss.y += boss.speed;
     if (Math.hypot(player.x - boss.x, player.y - boss.y) < PLAYER_RADIUS + boss.radius) {
@@ -503,7 +483,6 @@ function update(dt){
     if (t.life >= t.ttl) floatingTexts.splice(i,1);
   }
 
-  // UI
   allyText.textContent = allies.length;
   killText.textContent = killCount;
 }
@@ -586,7 +565,7 @@ function draw(){
     }
   });
 
-  // HUD: player HP
+  // HUD
   ctx.fillStyle = "#fff"; ctx.font = "14px sans-serif";
   ctx.fillText("HP: " + Math.max(0, Math.floor(player.hp)), 10, 18);
 }

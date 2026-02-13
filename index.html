@@ -2,22 +2,18 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
-<title>Vertical Lane Survival - 修正版（CLEAR重複解消・LINE表示対応）</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>Vertical Lane Survival - モバイル最適化（小さめ・CLEAR表示）</title>
 <style>
   html,body { height:100%; margin:0; background:#0b0b0b; color:#fff; font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; -webkit-tap-highlight-color: transparent; }
-  /* safe area 対応：LINE 等の in-app browser で下が切れないように余白を確保 */
-  body { padding-bottom: env(safe-area-inset-bottom, 0); box-sizing:border-box; }
   #container { width:100%; max-width:360px; margin:10px auto; box-sizing:border-box; padding:0 8px; }
   #ui { display:flex; gap:8px; align-items:center; justify-content:space-between; margin-bottom:8px; }
-  #gameWrap { position:relative; }
   #game { display:block; width:100%; background:#151515; border:4px solid #333; box-sizing:border-box; touch-action:none; border-radius:8px; }
   button { padding:6px 10px; background:#1f6feb; color:#fff; border:0; border-radius:6px; cursor:pointer; font-size:14px; }
   .info { font-size:13px; color:#ddd; line-height:1; }
   .hint { font-size:12px; color:#bbb; margin-top:6px; text-align:center; }
-  /* CLEAR overlay（DOMで一つだけ表示） */
-  .overlay-clear { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); pointer-events:none; display:none; z-index:10; }
-  .overlay-clear .text { font-weight:900; color:#fff59d; text-shadow:0 6px 18px rgba(0,0,0,0.8); font-size:48px; letter-spacing:6px; text-align:center; }
+  /* CLEAR 表示用フォント調整（大きく目立たせる） */
+  .overlay-clear { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; }
 </style>
 </head>
 <body>
@@ -26,37 +22,32 @@
       <div class="info">武器: <span id="weaponText">ハンドガン</span>　仲間: <span id="allyText">0</span>　Kill: <span id="killText">0</span></div>
       <div><button id="restartBtn">Restart</button></div>
     </div>
-
-    <div id="gameWrap">
+    <div style="position:relative;">
       <canvas id="game" width="450" height="800"></canvas>
-      <!-- CLEAR はここだけで表示（canvas 側では描画しない） -->
-      <div id="clearOverlay" class="overlay-clear"><div class="text">CLEAR!!</div></div>
+      <!-- CLEAR 表示は canvas 上に描画するが、念のため要素も用意（非表示） -->
+      <div id="clearOverlay" class="overlay-clear" style="display:none;">
+        <div style="font-weight:900;color:#fff59d;text-shadow:0 6px 18px rgba(0,0,0,0.8);font-size:48px;letter-spacing:6px;">CLEAR!!</div>
+      </div>
     </div>
-
     <div id="message"></div>
-    <div class="hint">画面をタッチして指を置いた位置にキャラが移動します（下のレーンに張り付き）</div>
+    <div class="hint">画面をタッチして指を置いた位置にキャラが移動します</div>
   </div>
 
 <script>
-/* 修正版
- - CLEAR の二重表示を解消：canvas 上では描画せず、DOM overlay（#clearOverlay）だけを使う
- - LINE 等の in-app browser で下が見切れないように、利用可能な高さを厳密に計算して canvas を縮小
- - safe-area-inset を考慮して余白を確保
- - それ以外のゲームロジックは前バージョンを踏襲
-*/
+/* レスポンシブかつ小さめ表示、CLEAR!! を中央に表示する完成版 */
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-const clearOverlay = document.getElementById('clearOverlay');
 
 const killText = document.getElementById('killText');
 const weaponText = document.getElementById('weaponText');
 const allyText = document.getElementById('allyText');
 const messageEl = document.getElementById('message');
 const restartBtn = document.getElementById('restartBtn');
+const clearOverlay = document.getElementById('clearOverlay');
 
-let CSS_WIDTH = 450;
-let CSS_HEIGHT = 800;
+let CSS_WIDTH = 450;   // 論理デザイン幅（内部で上書き）
+let CSS_HEIGHT = 800;  // 論理デザイン高さ（内部で上書き）
 
 const PLAYER_SPEED = 4;
 const PLAYER_RADIUS = 16;
@@ -93,20 +84,22 @@ let touchX = null;
 let touchActive = false;
 let touchIndicator = null;
 
-/* ---------- レスポンシブ / in-app safe area 対応 ---------- */
+/* リサイズ：画面幅に合わせて小さめに調整し、縦が見切れないようにする */
 function resizeCanvasToDisplaySize() {
-  // 親コンテナ幅（max 360）を基準にする
+  // 親コンテナの幅を基準に最大360pxに制限
   const container = document.getElementById('container');
   const maxW = Math.min(360, window.innerWidth - 16);
-  const cssW = Math.max(260, Math.floor(maxW));
-  // ブラウザの利用可能高さを計算（UI領域を考慮）
-  const uiRect = document.getElementById('ui').getBoundingClientRect();
-  const availableH = Math.max(360, Math.floor(window.innerHeight - uiRect.height - 80 - (parseFloat(getComputedStyle(document.body).paddingBottom) || 0)));
+  const cssW = Math.max(260, Math.floor(maxW)); // 最小幅260pxを確保
+  // 高さは画面に収まるように、余白を考慮して最大を設定
+  const maxAvailableH = Math.max(360, Math.floor(window.innerHeight - 140)); // UIやブラウザUI分を差し引く
+  // デザイン比（450x800）を維持しつつ、縦が見切れないように調整
   const aspect = 800 / 450;
   let cssH = Math.floor(cssW * aspect);
-  if (cssH > availableH) {
-    cssH = availableH;
+  if (cssH > maxAvailableH) {
+    cssH = maxAvailableH;
+    // 幅を高さに合わせて再計算
     const newW = Math.floor(cssH / aspect);
+    // ただし幅は最低値を下回らない
     if (newW >= 260) {
       canvas.style.width = newW + 'px';
       canvas.style.height = cssH + 'px';
@@ -125,17 +118,14 @@ function resizeCanvasToDisplaySize() {
     CSS_HEIGHT = cssH;
   }
 
+  // 内部ピクセル解像度を DPR に合わせる
   const dpr = Math.max(1, window.devicePixelRatio || 1);
   canvas.width = Math.floor(CSS_WIDTH * dpr);
   canvas.height = Math.floor(CSS_HEIGHT * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  // overlay の位置を canvas に合わせる（中央表示）
-  clearOverlay.style.left = (canvas.getBoundingClientRect().left + canvas.getBoundingClientRect().width / 2) + 'px';
-  clearOverlay.style.top = (canvas.getBoundingClientRect().top + canvas.getBoundingClientRect().height / 2) + 'px';
 }
 
-/* ---------- 座標変換 ---------- */
+/* 座標変換 */
 function clientXToCanvasX(clientX) {
   const rect = canvas.getBoundingClientRect();
   const x = (clientX - rect.left) * (CSS_WIDTH / rect.width);
@@ -147,7 +137,7 @@ function clientYToCanvasY(clientY) {
   return Math.max(0, Math.min(CSS_HEIGHT, y));
 }
 
-/* ---------- 初期化 ---------- */
+/* 初期化 */
 function resetGame() {
   player = { x: CSS_WIDTH/2, y: CSS_HEIGHT - 40, hp: 100, facing: -Math.PI/2 };
   bullets = [];
@@ -175,7 +165,7 @@ restartBtn.addEventListener('click', resetGame);
 window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
 window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
-/* ---------- タッチ / ポインタ ---------- */
+/* タッチ / ポインタ */
 canvas.addEventListener('touchstart', (ev) => {
   ev.preventDefault();
   const t = ev.touches[0];
@@ -226,17 +216,12 @@ canvas.addEventListener('pointercancel', (ev) => {
 
 window.addEventListener('resize', () => {
   resizeCanvasToDisplaySize();
-  // プレイヤー位置補正
-  if (player) {
-    player.x = Math.max(PLAYER_RADIUS, Math.min(CSS_WIDTH - PLAYER_RADIUS, player.x));
-    player.y = CSS_HEIGHT - 40;
-  }
+  // プレイヤー位置を画面幅に合わせて補正
+  player.x = Math.max(PLAYER_RADIUS, Math.min(CSS_WIDTH - PLAYER_RADIUS, player.x));
+  player.y = CSS_HEIGHT - 40;
 });
 
-/* ---------- ゲームロジック（弾は真上） ---------- */
-/* spawnEnemyGroup / spawnBoss / spawnItem / upgradeWeapon / shootPlayer / shootAlly / updateAllies / spawnExplosion / spawnLevelUpEffect / checkEnemyReachedBottom
-   は前バージョンと同等の実装を維持（省略せずに実装） */
-
+/* --- ゲームロジック（弾は真上） --- */
 function spawnEnemyGroup() {
   const totalEnemies = enemyGroups.reduce((s,g)=>s+g.enemies.length,0);
   const TOTAL_ENEMY_CAP = 120;
@@ -434,7 +419,7 @@ function checkEnemyReachedBottom(){
   return false;
 }
 
-/* ---------- 更新 / 描画 ---------- */
+/* 更新 */
 function update(dt){
   if (isGameOver) return;
   dt = Math.min(dt, 0.05);
@@ -457,7 +442,7 @@ function update(dt){
     if (boss.deathTimer >= 1.2) {
       isGameOver = true;
       messageEl.textContent = "ボス撃破！クリア！";
-      // DOM overlay を表示（canvas 側では CLEAR を描かない）
+      // CLEAR 表示を出す
       clearOverlay.style.display = 'block';
     }
   }
@@ -476,6 +461,7 @@ function update(dt){
     spawnItem();
   }
 
+  // プレイヤー移動（タッチ追従）
   if (touchX !== null) {
     const followLerp = 0.28;
     player.x += (touchX - player.x) * followLerp;
@@ -620,6 +606,7 @@ function update(dt){
   killText.textContent = killCount;
 }
 
+/* 描画（CSSピクセル単位） */
 function drawHuman(x,y,scale=1,color="#4caf50",gunColor="#333"){
   ctx.fillStyle = color;
   ctx.beginPath(); ctx.arc(x, y - 18*scale, 8*scale, 0, Math.PI*2); ctx.fill();
@@ -698,12 +685,28 @@ function draw(){
     ctx.globalAlpha = 1;
   }
 
-  // NOTE: CLEAR は canvas 上では描かない（overlay DOM を使う）
+  // CLEAR を canvas 上にも描画（overlay 要素は補助）
+  if (isGameOver && boss && boss.dead) {
+    // 半透明の暗い背景
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(0, 0, CSS_WIDTH, CSS_HEIGHT);
+    // 大きな CLEAR テキスト
+    ctx.fillStyle = "#fff59d";
+    ctx.font = Math.max(28, Math.floor(CSS_WIDTH * 0.12)) + "px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.shadowColor = "rgba(0,0,0,0.8)";
+    ctx.shadowBlur = 18;
+    ctx.fillText("CLEAR!!", CSS_WIDTH / 2, CSS_HEIGHT / 2);
+    ctx.shadowBlur = 0;
+    ctx.textAlign = "start";
+  }
+
   ctx.fillStyle = "#fff"; ctx.font = "14px sans-serif";
   ctx.fillText("HP: " + Math.max(0, Math.floor(player.hp)), 10, 18);
 }
 
-/* ---------- メインループ ---------- */
+/* メインループ */
 function gameLoop(now){
   const t = now || performance.now();
   const dt = Math.min((t - lastTime) / 1000, 0.05);
@@ -715,7 +718,7 @@ function gameLoop(now){
   requestAnimationFrame(gameLoop);
 }
 
-/* ---------- 起動 ---------- */
+/* 起動 */
 function start() {
   resizeCanvasToDisplaySize();
   resetGame();

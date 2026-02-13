@@ -2,40 +2,44 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Vertical Lane Survival - 弾は常に真上へ</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<title>Vertical Lane Survival - スマホ対応版（タッチ操作）</title>
 <style>
-  html,body { height:100%; margin:0; background:#0b0b0b; color:#fff; font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
-  #ui { width:480px; margin:12px auto 6px; display:flex; gap:8px; align-items:center; justify-content:space-between; }
-  #game { display:block; margin:0 auto; background:#151515; border:4px solid #333; width:450px; height:800px; box-shadow:0 6px 18px rgba(0,0,0,0.6); }
+  html,body { height:100%; margin:0; background:#0b0b0b; color:#fff; font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; -webkit-tap-highlight-color: transparent; }
+  #container { width:100%; max-width:480px; margin:12px auto; }
+  #ui { display:flex; gap:8px; align-items:center; justify-content:space-between; margin-bottom:8px; }
+  #game { display:block; width:100%; background:#151515; border:4px solid #333; box-sizing:border-box; }
   button { padding:6px 10px; background:#1f6feb; color:#fff; border:0; border-radius:6px; cursor:pointer; }
   .info { font-size:14px; color:#ddd; }
   #message { text-align:center; margin-top:8px; color:#ffd; min-height:20px; }
+  /* タッチ操作の説明（小さく） */
+  .hint { font-size:12px; color:#bbb; margin-top:6px; text-align:center; }
 </style>
 </head>
 <body>
-  <div id="ui">
-    <div class="info">武器: <span id="weaponText">ハンドガン</span>　仲間: <span id="allyText">0</span>　Kill: <span id="killText">0</span></div>
-    <div><button id="restartBtn">Restart</button></div>
+  <div id="container">
+    <div id="ui">
+      <div class="info">武器: <span id="weaponText">ハンドガン</span>　仲間: <span id="allyText">0</span>　Kill: <span id="killText">0</span></div>
+      <div><button id="restartBtn">Restart</button></div>
+    </div>
+    <canvas id="game" width="450" height="800"></canvas>
+    <div id="message"></div>
+    <div class="hint">画面をタッチして指を置いた位置にキャラが移動します（下のレーンに張り付き）</div>
   </div>
-  <canvas id="game" width="450" height="800"></canvas>
-  <div id="message"></div>
 
 <script>
-/*
-  このバージョンでは「弾は常に真上（画面上方向）にまっすぐ飛ぶ」ように固定しています。
-  発射時に angle を -Math.PI/2 に固定し、以降の移動は angle と speed のみで行います。
-*/
+/* ====== スマホ対応版（タッチで指のXに追従） ====== */
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-const WIDTH = canvas.width, HEIGHT = canvas.height;
 
 const killText = document.getElementById('killText');
 const weaponText = document.getElementById('weaponText');
 const allyText = document.getElementById('allyText');
 const messageEl = document.getElementById('message');
 const restartBtn = document.getElementById('restartBtn');
+
+const WIDTH = canvas.width, HEIGHT = canvas.height;
 
 const PLAYER_SPEED = 4;
 const PLAYER_RADIUS = 16;
@@ -55,7 +59,7 @@ let itemSpawnInterval = 2.5;
 let shootCooldown = 0;
 
 let player;
-let bullets = [];       // { x,y, angle, speed, piercing, isAlly, createdAt, life }
+let bullets = [];
 let enemyGroups = [];
 let items = [];
 let allies = [];
@@ -67,6 +71,11 @@ let particles = [];
 let floatingTexts = [];
 
 let weapon = { shotgun: 0, assault: 0, laser: 0, missile: 0 };
+
+/* ====== タッチ制御変数 ====== */
+let touchX = null;           // キャンバス座標でのターゲットX（null = タッチなし）
+let touchActive = false;     // タッチ中フラグ
+let touchIndicator = null;   // {x,y} を描画するための位置（画面上の指位置）
 
 /* ====== 初期化 ====== */
 function resetGame() {
@@ -89,12 +98,81 @@ function resetGame() {
   allyText.textContent = allies.length;
   weaponText.textContent = "ハンドガン";
   messageEl.textContent = "";
+  touchX = null;
+  touchActive = false;
+  touchIndicator = null;
 }
 restartBtn.addEventListener('click', resetGame);
+
+/* キーボード（デスクトップ用） */
 window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
 window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
-/* ====== 敵群れ生成（安定化） ====== */
+/* ====== タッチ / ポインターイベント ====== */
+/* ユーザーがタッチした位置をキャンバス座標に変換して touchX に保存する */
+function clientXToCanvasX(clientX) {
+  const rect = canvas.getBoundingClientRect();
+  const x = (clientX - rect.left) * (canvas.width / rect.width);
+  return Math.max(PLAYER_RADIUS, Math.min(canvas.width - PLAYER_RADIUS, x));
+}
+function clientYToCanvasY(clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const y = (clientY - rect.top) * (canvas.height / rect.height);
+  return Math.max(0, Math.min(canvas.height, y));
+}
+
+/* タッチイベント */
+canvas.addEventListener('touchstart', (ev) => {
+  ev.preventDefault();
+  const t = ev.touches[0];
+  touchX = clientXToCanvasX(t.clientX);
+  touchActive = true;
+  touchIndicator = { x: touchX, y: clientYToCanvasY(t.clientY) };
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (ev) => {
+  ev.preventDefault();
+  const t = ev.touches[0];
+  touchX = clientXToCanvasX(t.clientX);
+  touchActive = true;
+  touchIndicator = { x: touchX, y: clientYToCanvasY(t.clientY) };
+}, { passive: false });
+
+canvas.addEventListener('touchend', (ev) => {
+  ev.preventDefault();
+  touchActive = false;
+  touchX = null;
+  touchIndicator = null;
+}, { passive: false });
+
+/* ポインター（マウス）対応：デスクトップでも同じ操作感 */
+canvas.addEventListener('pointerdown', (ev) => {
+  ev.preventDefault();
+  touchX = clientXToCanvasX(ev.clientX);
+  touchActive = true;
+  touchIndicator = { x: touchX, y: clientYToCanvasY(ev.clientY) };
+});
+canvas.addEventListener('pointermove', (ev) => {
+  if (!touchActive) return;
+  ev.preventDefault();
+  touchX = clientXToCanvasX(ev.clientX);
+  touchIndicator = { x: touchX, y: clientYToCanvasY(ev.clientY) };
+});
+canvas.addEventListener('pointerup', (ev) => {
+  ev.preventDefault();
+  touchActive = false;
+  touchX = null;
+  touchIndicator = null;
+});
+canvas.addEventListener('pointercancel', (ev) => {
+  ev.preventDefault();
+  touchActive = false;
+  touchX = null;
+  touchIndicator = null;
+});
+
+/* ====== 既存ゲームロジック（敵生成・弾・アイテム等） ====== */
+/* 敵群れ生成（端寄せ防止・上端補正） */
 function spawnEnemyGroup() {
   const totalEnemies = enemyGroups.reduce((s,g)=>s+g.enemies.length,0);
   const TOTAL_ENEMY_CAP = 120;
@@ -171,7 +249,7 @@ function spawnEnemyGroup() {
   enemyGroups.push(group);
 }
 
-/* ====== ボス生成 ====== */
+/* ボス生成 */
 function spawnBoss() {
   boss = {
     x: WIDTH/2,
@@ -184,7 +262,7 @@ function spawnBoss() {
   };
 }
 
-/* ====== アイテム生成 ====== */
+/* アイテム生成 */
 function spawnItem() {
   if (boss && !boss.dead) return;
 
@@ -216,7 +294,7 @@ function spawnItem() {
   items.push({ x, y: -20, type: "weapon", guard, speed: baseItemSpeed });
 }
 
-/* ====== 武器強化 ====== */
+/* 武器強化 */
 function upgradeWeapon() {
   const roll = Math.random();
   if (roll < 0.25) { weapon.shotgun++; weaponText.textContent = "ショットガン Lv" + weapon.shotgun; }
@@ -225,15 +303,14 @@ function upgradeWeapon() {
   else { weapon.missile++; weaponText.textContent = "ミサイル Lv" + weapon.missile; }
 }
 
-/* ====== 発射（常に真上） ====== */
+/* 発射（常に真上） */
 function computeGunTip(x,y,facing,ownerRadius){
   const offset = ownerRadius + 8;
   return { tx: x + Math.cos(facing)*offset, ty: y + Math.sin(facing)*offset };
 }
 function shootPlayer(x,y){
-  // ここで angle を常に -Math.PI/2（真上）に固定する
-  const angle = -Math.PI/2;
-  const tip = computeGunTip(x, y-6, angle, PLAYER_RADIUS); // 見た目の銃口位置は facing ではなく angle を使ってもOK
+  const angle = -Math.PI/2; // 真上
+  const tip = computeGunTip(x, y-6, angle, PLAYER_RADIUS);
   const speed = BULLET_SPEED;
   const piercing = weapon.laser > 0;
   const count = 1 + weapon.shotgun * 2;
@@ -247,7 +324,7 @@ function shootPlayer(x,y){
   }
 }
 function shootAlly(a){
-  const angle = -Math.PI/2; // 仲間弾も真上
+  const angle = -Math.PI/2;
   const tip = computeGunTip(a.x, a.y-4, angle, 10);
   bullets.push({
     x: tip.tx, y: tip.ty,
@@ -257,7 +334,7 @@ function shootAlly(a){
   });
 }
 
-/* ====== 仲間更新 ====== */
+/* 仲間更新 */
 function updateAllies(){
   const colWidth = 36;
   const maxPerRow = 6;
@@ -274,7 +351,7 @@ function updateAllies(){
   });
 }
 
-/* ====== 爆発パーティクル ====== */
+/* 爆発パーティクル */
 function spawnExplosion(x,y,color="#ffcc66",count=40){
   for (let i=0;i<count;i++){
     const ang = Math.random()*Math.PI*2;
@@ -283,13 +360,13 @@ function spawnExplosion(x,y,color="#ffcc66",count=40){
   }
 }
 
-/* ====== レベルアップ演出 ====== */
+/* レベルアップ演出 */
 function spawnLevelUpEffect(x,y,text="Level Up!"){
   spawnExplosion(x,y,"#ffd166",14);
   floatingTexts.push({ x, y, text, life:0, ttl:1.2, vy:-30 });
 }
 
-/* ====== 敵が下ラインに到達したら敗北判定 ====== */
+/* 敵が下ラインに到達したら敗北判定 */
 function checkEnemyReachedBottom(){
   const bottomLine = HEIGHT - 90;
   for (const g of enemyGroups){
@@ -342,11 +419,25 @@ function update(dt){
     spawnItem();
   }
 
-  if (keys['a'] || keys['arrowleft']) { player.x -= PLAYER_SPEED; player.facing = -Math.PI/2 - 0.25; }
-  if (keys['d'] || keys['arrowright']) { player.x += PLAYER_SPEED; player.facing = -Math.PI/2 + 0.25; }
-  if (!keys['a'] && !keys['d']) player.facing = -Math.PI/2;
+  // プレイヤー移動：タッチがあれば touchX に滑らかに追従（下レーンに張り付き）
+  if (touchX !== null) {
+    // 追従速度（0..1）を調整すると追従の速さが変わる
+    const followLerp = 0.28; // 小さくするとゆっくり、大きくすると瞬間移動に近い
+    player.x += (touchX - player.x) * followLerp;
+    // プレイヤーの向きは固定（見た目）
+    player.facing = -Math.PI/2;
+  } else {
+    // キーボード操作（デスクトップ）
+    if (keys['a'] || keys['arrowleft']) { player.x -= PLAYER_SPEED; player.facing = -Math.PI/2 - 0.25; }
+    if (keys['d'] || keys['arrowright']) { player.x += PLAYER_SPEED; player.facing = -Math.PI/2 + 0.25; }
+    if (!keys['a'] && !keys['d']) player.facing = -Math.PI/2;
+  }
+  // clamp X
   player.x = Math.max(PLAYER_RADIUS, Math.min(WIDTH - PLAYER_RADIUS, player.x));
+  // ensure player stays on bottom lane
+  player.y = HEIGHT - 40;
 
+  // auto shooting
   shootCooldown -= dt;
   let interval = 0.45 - weapon.assault * 0.03;
   if (interval < 0.12) interval = 0.12;
@@ -357,17 +448,16 @@ function update(dt){
 
   updateAllies();
 
-  // --- 弾更新（発射時の angle/speed のみで移動） ---
+  // 弾更新（角度/速度固定で直進）
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
     b.x += Math.cos(b.angle) * b.speed * dt;
     b.y += Math.sin(b.angle) * b.speed * dt;
-
     if (b.createdAt && b.life && (performance.now() - b.createdAt > b.life)) { bullets.splice(i,1); continue; }
     if (b.y < -80 || b.y > HEIGHT + 80 || b.x < -80 || b.x > WIDTH + 80) { bullets.splice(i,1); continue; }
   }
 
-  // enemy groups update
+  // 敵更新
   for (let gi = enemyGroups.length - 1; gi >= 0; gi--) {
     const g = enemyGroups[gi];
     g.y += enemySpeed;
@@ -416,7 +506,7 @@ function update(dt){
     if (it.y > HEIGHT + 80) items.splice(i,1);
   }
 
-  // bullets vs enemies & boss
+  // 弾と敵の当たり判定（群れ & ボス）
   for (let bi = bullets.length - 1; bi >= 0; bi--) {
     const b = bullets[bi];
     let hit = false;
@@ -446,7 +536,7 @@ function update(dt){
     }
   }
 
-  // bullets vs weapon bars (guard)
+  // 弾と武器バーの当たり判定（ガード削り）
   for (let bi = bullets.length - 1; bi >= 0; bi--) {
     const b = bullets[bi];
     for (let ii = items.length - 1; ii >= 0; ii--) {
@@ -564,6 +654,16 @@ function draw(){
       ctx.fillStyle = "#000"; ctx.font = "16px sans-serif"; ctx.fillText("+" + it.value, it.x - 8, it.y + 6);
     }
   });
+
+  // touch indicator（指を置いた位置を表示）
+  if (touchIndicator) {
+    ctx.globalAlpha = 0.28;
+    ctx.fillStyle = "#88ccff";
+    ctx.beginPath();
+    ctx.arc(touchIndicator.x, touchIndicator.y, 28, 0, Math.PI*2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
 
   // HUD
   ctx.fillStyle = "#fff"; ctx.font = "14px sans-serif";
